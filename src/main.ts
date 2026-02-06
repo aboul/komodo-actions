@@ -1,5 +1,4 @@
 import * as core from '@actions/core'
-import { writeFile } from 'node:fs/promises'
 import { KomodoClient } from 'komodo_client'
 import type {
   Update,
@@ -28,18 +27,23 @@ function hasOid(item: UpdateItem): item is Update & { _id: { $oid: string } } {
 }
 
 async function writeStepSummary(updateStatusMap: Record<string, string>) {
-  const summaryFile = process.env.GITHUB_STEP_SUMMARY
-  if (!summaryFile) return
-
-  let markdown = `### 📝 Komodo Deployment Summary\n\n`
-  markdown += `| Update ID | Status |\n`
-  markdown += `|-----------|--------|\n`
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const table: any[][] = [
+    [
+      { data: 'Update ID', header: true },
+      { data: 'Status', header: true }
+    ]
+  ]
 
   for (const [id, status] of Object.entries(updateStatusMap)) {
-    markdown += `| ${id} | ${status} |\n`
+    const statusText = status == 'Complete' ? `✅ ${status}` : `❌ ${status}`
+    table.push([id, statusText])
   }
 
-  await writeFile(summaryFile, markdown, { flag: 'a' }) // 'a' = append
+  await core.summary
+    .addHeading('📝 Komodo Deployment Summary')
+    .addTable(table)
+    .write()
 }
 
 /**

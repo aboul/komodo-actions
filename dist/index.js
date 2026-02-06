@@ -27,7 +27,6 @@ import require$$6 from 'string_decoder';
 import require$$0$9 from 'diagnostics_channel';
 import require$$2$2 from 'child_process';
 import require$$6$1 from 'timers';
-import { writeFile } from 'node:fs/promises';
 
 var commonjsGlobal = typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : typeof global !== 'undefined' ? global : typeof self !== 'undefined' ? self : {};
 
@@ -28667,16 +28666,21 @@ function hasOid(item) {
         typeof item._id?.$oid === 'string');
 }
 async function writeStepSummary(updateStatusMap) {
-    const summaryFile = process.env.GITHUB_STEP_SUMMARY;
-    if (!summaryFile)
-        return;
-    let markdown = `### 📝 Komodo Deployment Summary\n\n`;
-    markdown += `| Update ID | Status |\n`;
-    markdown += `|-----------|--------|\n`;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const table = [
+        [
+            { data: 'Update ID', header: true },
+            { data: 'Status', header: true }
+        ]
+    ];
     for (const [id, status] of Object.entries(updateStatusMap)) {
-        markdown += `| ${id} | ${status} |\n`;
+        const statusText = status == 'Complete' ? `✅ ${status}` : `❌ ${status}`;
+        table.push([id, statusText]);
     }
-    await writeFile(summaryFile, markdown, { flag: 'a' }); // 'a' = append
+    await coreExports.summary
+        .addHeading('📝 Komodo Deployment Summary')
+        .addTable(table)
+        .write();
 }
 /**
  * Execute a single Komodo operation depending on the resource kind

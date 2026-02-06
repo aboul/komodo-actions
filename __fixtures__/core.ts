@@ -8,3 +8,11 @@ export const getInput = jest.fn<typeof core.getInput>()
 export const setOutput = jest.fn<typeof core.setOutput>()
 export const setFailed = jest.fn<typeof core.setFailed>()
 export const warning = jest.fn<typeof core.warning>()
+
+export const summary = {
+  addHeading: jest.fn(() => summary),
+  addTable: jest.fn(() => summary),
+  addLink: jest.fn(() => summary),
+  addCodeBlock: jest.fn(() => summary),
+  write: jest.fn(() => Promise.resolve())
+}

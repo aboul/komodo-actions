@@ -90,10 +90,6 @@ describe('Komodo Deploy Action', () => {
   beforeEach(() => {
     jest.clearAllMocks()
 
-    delete process.env.KOMODO_URL
-    delete process.env.KOMODO_API_KEY
-    delete process.env.KOMODO_API_SECRET
-
     process.env.GITHUB_STEP_SUMMARY = '/tmp/summary.md'
 
     // Mock inputs par défaut
@@ -115,13 +111,18 @@ describe('Komodo Deploy Action', () => {
     })
 
     // Vérifie que le résumé a été écrit
-    expect(mockWriteFile).toHaveBeenCalledWith(
-      '/tmp/summary.md',
-      expect.stringContaining('| 123test | Complete |'),
-      { flag: 'a' }
+    expect(core.summary.addHeading).toHaveBeenCalledWith(
+      '📝 Komodo Deployment Summary'
     )
-    const markdownWritten = mockWriteFile.mock.calls[0][1] as string
-    expect(markdownWritten).toContain('| 123test | Complete |')
+
+    expect(core.summary.addTable).toHaveBeenCalledWith([
+      [
+        { data: 'Update ID', header: true },
+        { data: 'Status', header: true }
+      ],
+      ['123test', '✅ Complete']
+    ])
+    expect(core.summary.write).toHaveBeenCalled()
   })
 
   it('handles dry-run correctly', async () => {
