@@ -90,6 +90,10 @@ describe('Komodo Deploy Action', () => {
   beforeEach(() => {
     jest.clearAllMocks()
 
+    delete process.env.KOMODO_URL
+    delete process.env.KOMODO_API_KEY
+    delete process.env.KOMODO_API_SECRET
+
     process.env.GITHUB_STEP_SUMMARY = '/tmp/summary.md'
 
     // Mock inputs par défaut

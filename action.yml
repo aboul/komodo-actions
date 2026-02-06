@@ -19,12 +19,11 @@ inputs:
     description: 'Komodo API secret'
     required: true
   kind:
-    description: 'Type de ressource à déployer: stack | service | procedure'
+    description: 'Resource type to deploy: stack | service | procedure'
     required: true
   patterns:
     description:
-      'JSON array des noms ou patterns des ressources à déployer, ex:
-      ["website","backend"]'
+      'JSON array of resources names or ids, ex: ["website","backend"]'
     required: true
   dry-run:
     description: Dry-run
@@ -37,4 +36,4 @@ outputs:
 
 runs:
   using: 'node24'
-  main: 'dist/index.js' # ton JS compilé depuis TypeScript
+  main: 'dist/index.js'

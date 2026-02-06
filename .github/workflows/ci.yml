@@ -69,7 +69,9 @@ jobs:
         with:
           kind: procedure
           patterns: '["test-procedure"]'
-
+          api-key: '{{ secrets.KOMODO_API_KEY }}'
+          api-secret: '{{ secrets.KOMODO_API_SECRET }}'
+          komodo-url: '{{ secrets.KOMODO_URL }}'
       - name: Print Output
         id: output
         run:
@@ -77,4 +79,4 @@ jobs:
           steps.test-run-procedure.outputs }}"
 
       - name: Check summary file
-        run: cat $GITHUB_STEP_SUMMARY
+        run: 'cat $GITHUB_STEP_SUMMARY'
