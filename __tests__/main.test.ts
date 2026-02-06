@@ -15,12 +15,6 @@ import { jest } from '@jest/globals'
 import * as core from '../__fixtures__/core.js'
 jest.unstable_mockModule('@actions/core', () => core)
 
-// --- Mock du module fs/promises pour writeFile ---
-const mockWriteFile = jest.fn()
-jest.unstable_mockModule('node:fs/promises', () => ({
-  writeFile: mockWriteFile
-}))
-
 // --- Mock du client Komodo ---
 const mockExecuteAndPoll: any = jest.fn()
 jest.unstable_mockModule('komodo_client', () => ({
@@ -90,17 +84,15 @@ describe('Komodo Deploy Action', () => {
   beforeEach(() => {
     jest.clearAllMocks()
 
-    process.env.GITHUB_STEP_SUMMARY = '/tmp/summary.md'
+    delete process.env.KOMODO_URL
+    delete process.env.KOMODO_API_KEY
+    delete process.env.KOMODO_API_SECRET
 
     // Mock inputs par défaut
     mockInputs()
 
     // Mock par défaut du client Komodo
     mockExecuteAndPoll.mockResolvedValue([makeUpdate('123test')])
-  })
-
-  afterEach(() => {
-    delete process.env.GITHUB_STEP_SUMMARY
   })
 
   it('sets updates output correctly', async () => {
@@ -133,7 +125,6 @@ describe('Komodo Deploy Action', () => {
     // Komodo client ne doit pas être appelé
     expect(mockExecuteAndPoll).not.toHaveBeenCalled()
     expect(core.setOutput).toHaveBeenCalledWith('updates', {})
-    expect(mockWriteFile).not.toHaveBeenCalled()
   })
 
   it('marks action as failed on Komodo error', async () => {
