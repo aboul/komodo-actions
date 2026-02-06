@@ -11,7 +11,6 @@ on:
 permissions:
   contents: read
 
-
 env:
   KOMODO_URL: ${{ secrets.KOMODO_URL }}
   KOMODO_API_KEY: ${{ secrets.KOMODO_API_KEY }}
@@ -74,7 +73,8 @@ jobs:
       - name: Print Output
         id: output
         run:
-          echo "${{ toJson(steps.test-deploy-stack.outputs.updates) }}" && echo "${{ toJson(steps.test-run-procedure.outputs.updates) }}"
+          echo "${{ toJson(steps.test-deploy-stack.outputs.updates) }}" && echo
+          "${{ toJson(steps.test-run-procedure.outputs.updates) }}"
 
       - name: Check summary file
         run: cat "$GITHUB_STEP_SUMMARY"
