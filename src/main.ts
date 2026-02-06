@@ -9,7 +9,7 @@ import type {
 /**
  * Union type returned by Komodo batch / execution endpoints
  */
-type UpdateItem =
+export type UpdateItem =
   | Update
   | (Update | { status: 'Err'; data: BatchExecutionResponseItemErr })
 
@@ -45,9 +45,9 @@ async function writeStepSummary(updateStatusMap: Record<string, string>) {
 /**
  * Execute a single Komodo operation depending on the resource kind
  */
-async function executeOne(
+export async function executeOne(
   client: ReturnType<typeof KomodoClient>,
-  kind: 'stack' | 'service' | 'procedure',
+  kind: 'stack' | 'procedure',
   name: string
 ): Promise<UpdateResult> {
   switch (kind) {
@@ -71,7 +71,6 @@ export async function run(): Promise<void> {
 
     const kind = core.getInput('kind', { required: true }) as
       | 'stack'
-      | 'service'
       | 'procedure'
 
     const rawPatterns = core.getInput('patterns', { required: true })
@@ -80,7 +79,7 @@ export async function run(): Promise<void> {
     const patterns: string[] = JSON.parse(rawPatterns)
 
     if (!Array.isArray(patterns) || patterns.length === 0) {
-      throw new Error('patterns must be a non-empty JSON array')
+      core.setOutput('updates', 'Nothing to update here')
     }
 
     core.info(`Kind: ${kind}`)
@@ -88,6 +87,7 @@ export async function run(): Promise<void> {
 
     if (dryRun) {
       core.info('🧪 Dry-run enabled, nothing will be deployed')
+      core.setOutput('updates', {})
       return
     }
 
@@ -99,9 +99,10 @@ export async function run(): Promise<void> {
       core.getInput('api-secret') || process.env.KOMODO_API_SECRET
 
     if (!komodoUrl || !apiKey || !apiSecret) {
-      throw new Error(
+      core.setFailed(
         'Komodo URL / API key / API secret must be provided either via input or env'
       )
+      return
     }
 
     const client = KomodoClient(komodoUrl, {
@@ -120,6 +121,7 @@ export async function run(): Promise<void> {
       core.info(`🚀 ${kind} → ${name}`)
 
       const result = await executeOne(client, kind, name)
+
       if (Array.isArray(result)) {
         results.push(...result)
       } else {
@@ -141,10 +143,6 @@ export async function run(): Promise<void> {
     // Write summary to GitHub UI
     await writeStepSummary(updateStatusMap)
   } catch (err) {
-    if (err instanceof Error) {
-      core.setFailed(err.message)
-    } else {
-      core.setFailed('Unknown error')
-    }
+    if (err instanceof Error) core.setFailed(err.message)
   }
 }
