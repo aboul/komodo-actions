@@ -22,9 +22,11 @@ inputs:
     description: 'Type de ressource à déployer: stack | service | procedure'
     required: true
   patterns:
-    description: 'JSON array des noms ou patterns des ressources à déployer, ex: ["website","backend"]'
+    description:
+      'JSON array des noms ou patterns des ressources à déployer, ex:
+      ["website","backend"]'
     required: true
-  dry-run: 
+  dry-run:
     description: Dry-run
     required: false
     default: 'false'
@@ -36,4 +38,3 @@ outputs:
 runs:
   using: 'node24'
   main: 'dist/index.js' # ton JS compilé depuis TypeScript
-  

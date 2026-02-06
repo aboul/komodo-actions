@@ -27,6 +27,7 @@ import require$$6 from 'string_decoder';
 import require$$0$9 from 'diagnostics_channel';
 import require$$2$2 from 'child_process';
 import require$$6$1 from 'timers';
+import { writeFile } from 'node:fs/promises';
 
 var commonjsGlobal = typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : typeof global !== 'undefined' ? global : typeof self !== 'undefined' ? self : {};
 
@@ -27246,41 +27247,1511 @@ function requireCore () {
 
 var coreExports = requireCore();
 
-/**
- * Waits for a number of milliseconds.
- *
- * @param milliseconds The number of milliseconds to wait.
- * @returns Resolves with 'done!' after the wait is over.
- */
-async function wait(milliseconds) {
-    return new Promise((resolve) => {
-        if (isNaN(milliseconds))
-            throw new Error('milliseconds is not a number');
-        setTimeout(() => resolve('done!'), milliseconds);
+const terminal_methods = (url, state) => {
+    const connect_terminal = ({ query, on_message, on_login, on_open, on_close, }) => {
+        const url_query = new URLSearchParams(query).toString();
+        const ws = new WebSocket(url.replace("http", "ws") + "/ws/terminal?" + url_query);
+        // Handle login on websocket open
+        ws.onopen = () => {
+            const login_msg = {
+                    type: "ApiKeys",
+                    params: {
+                        key: state.key,
+                        secret: state.secret,
+                    },
+                };
+            ws.send(JSON.stringify(login_msg));
+            on_open?.();
+        };
+        ws.onmessage = (e) => {
+            if (e.data == "LOGGED_IN") {
+                ws.binaryType = "arraybuffer";
+                ws.onmessage = (e) => on_message?.(e);
+                on_login?.();
+                return;
+            }
+            else {
+                on_message?.(e);
+            }
+        };
+        ws.onclose = () => on_close?.();
+        return ws;
+    };
+    const execute_terminal = async (request, callbacks) => {
+        const stream = await execute_terminal_stream(request);
+        for await (const line of stream) {
+            if (line.startsWith("__KOMODO_EXIT_CODE")) {
+                await callbacks?.onFinish?.(line.split(":")[1]);
+                return;
+            }
+            else {
+                await callbacks?.onLine?.(line);
+            }
+        }
+        // This is hit if no __KOMODO_EXIT_CODE is sent, ie early exit
+        await callbacks?.onFinish?.("Early exit without code");
+    };
+    const execute_terminal_stream = (request) => execute_stream("/terminal/execute", request);
+    const connect_container_exec = ({ query, ...callbacks }) => connect_exec({ query: { type: "container", query }, ...callbacks });
+    const connect_deployment_exec = ({ query, ...callbacks }) => connect_exec({ query: { type: "deployment", query }, ...callbacks });
+    const connect_stack_exec = ({ query, ...callbacks }) => connect_exec({ query: { type: "stack", query }, ...callbacks });
+    const connect_exec = ({ query: { type, query }, on_message, on_login, on_open, on_close, }) => {
+        const url_query = new URLSearchParams(query).toString();
+        const ws = new WebSocket(url.replace("http", "ws") + `/ws/${type}/terminal?` + url_query);
+        // Handle login on websocket open
+        ws.onopen = () => {
+            const login_msg = {
+                    type: "ApiKeys",
+                    params: {
+                        key: state.key,
+                        secret: state.secret,
+                    },
+                };
+            ws.send(JSON.stringify(login_msg));
+            on_open?.();
+        };
+        ws.onmessage = (e) => {
+            if (e.data == "LOGGED_IN") {
+                ws.binaryType = "arraybuffer";
+                ws.onmessage = (e) => on_message?.(e);
+                on_login?.();
+                return;
+            }
+            else {
+                on_message?.(e);
+            }
+        };
+        ws.onclose = () => on_close?.();
+        return ws;
+    };
+    const execute_container_exec = (body, callbacks) => execute_exec({ type: "container", body }, callbacks);
+    const execute_deployment_exec = (body, callbacks) => execute_exec({ type: "deployment", body }, callbacks);
+    const execute_stack_exec = (body, callbacks) => execute_exec({ type: "stack", body }, callbacks);
+    const execute_exec = async (request, callbacks) => {
+        const stream = await execute_exec_stream(request);
+        for await (const line of stream) {
+            if (line.startsWith("__KOMODO_EXIT_CODE")) {
+                await callbacks?.onFinish?.(line.split(":")[1]);
+                return;
+            }
+            else {
+                await callbacks?.onLine?.(line);
+            }
+        }
+        // This is hit if no __KOMODO_EXIT_CODE is sent, ie early exit
+        await callbacks?.onFinish?.("Early exit without code");
+    };
+    const execute_container_exec_stream = (body) => execute_exec_stream({ type: "container", body });
+    const execute_deployment_exec_stream = (body) => execute_exec_stream({ type: "deployment", body });
+    const execute_stack_exec_stream = (body) => execute_exec_stream({ type: "stack", body });
+    const execute_exec_stream = (request) => execute_stream(`/terminal/execute/${request.type}`, request.body);
+    const execute_stream = (path, request) => new Promise(async (res, rej) => {
+        try {
+            let response = await fetch(url + path, {
+                method: "POST",
+                body: JSON.stringify(request),
+                headers: {
+                    ...(state.jwt
+                        ? {
+                            authorization: state.jwt,
+                        }
+                        : state.key && state.secret
+                            ? {
+                                "x-api-key": state.key,
+                                "x-api-secret": state.secret,
+                            }
+                            : {}),
+                    "content-type": "application/json",
+                },
+            });
+            if (response.status === 200) {
+                if (response.body) {
+                    const stream = response.body
+                        .pipeThrough(new TextDecoderStream("utf-8"))
+                        .pipeThrough(new TransformStream({
+                        start(_controller) {
+                            this.tail = "";
+                        },
+                        transform(chunk, controller) {
+                            const data = this.tail + chunk; // prepend any carry‑over
+                            const parts = data.split(/\r?\n/); // split on CRLF or LF
+                            this.tail = parts.pop(); // last item may be incomplete
+                            for (const line of parts)
+                                controller.enqueue(line);
+                        },
+                        flush(controller) {
+                            if (this.tail)
+                                controller.enqueue(this.tail); // final unterminated line
+                        },
+                    }));
+                    res(stream);
+                }
+                else {
+                    rej({
+                        status: response.status,
+                        result: { error: "No response body", trace: [] },
+                    });
+                }
+            }
+            else {
+                try {
+                    const result = await response.json();
+                    rej({ status: response.status, result });
+                }
+                catch (error) {
+                    rej({
+                        status: response.status,
+                        result: {
+                            error: "Failed to get response body",
+                            trace: [JSON.stringify(error)],
+                        },
+                        error,
+                    });
+                }
+            }
+        }
+        catch (error) {
+            rej({
+                status: 1,
+                result: {
+                    error: "Request failed with error",
+                    trace: [JSON.stringify(error)],
+                },
+                error,
+            });
+        }
     });
+    return {
+        connect_terminal,
+        execute_terminal,
+        execute_terminal_stream,
+        connect_exec,
+        connect_container_exec,
+        execute_container_exec,
+        execute_container_exec_stream,
+        connect_deployment_exec,
+        execute_deployment_exec,
+        execute_deployment_exec_stream,
+        connect_stack_exec,
+        execute_stack_exec,
+        execute_stack_exec_stream,
+    };
+};
+
+/*
+ Generated by typeshare 1.13.3
+*/
+/** The levels of permission that a User or UserGroup can have on a resource. */
+var PermissionLevel;
+(function (PermissionLevel) {
+    /** No permissions. */
+    PermissionLevel["None"] = "None";
+    /** Can read resource information and config */
+    PermissionLevel["Read"] = "Read";
+    /** Can execute actions on the resource */
+    PermissionLevel["Execute"] = "Execute";
+    /** Can update the resource configuration */
+    PermissionLevel["Write"] = "Write";
+})(PermissionLevel || (PermissionLevel = {}));
+var ScheduleFormat;
+(function (ScheduleFormat) {
+    ScheduleFormat["English"] = "English";
+    ScheduleFormat["Cron"] = "Cron";
+})(ScheduleFormat || (ScheduleFormat = {}));
+var FileFormat;
+(function (FileFormat) {
+    FileFormat["KeyValue"] = "key_value";
+    FileFormat["Toml"] = "toml";
+    FileFormat["Yaml"] = "yaml";
+    FileFormat["Json"] = "json";
+})(FileFormat || (FileFormat = {}));
+var ActionState;
+(function (ActionState) {
+    /** Unknown case */
+    ActionState["Unknown"] = "Unknown";
+    /** Last clone / pull successful (or never cloned) */
+    ActionState["Ok"] = "Ok";
+    /** Last clone / pull failed */
+    ActionState["Failed"] = "Failed";
+    /** Currently running */
+    ActionState["Running"] = "Running";
+})(ActionState || (ActionState = {}));
+var TemplatesQueryBehavior;
+(function (TemplatesQueryBehavior) {
+    /** Include templates in results. Default. */
+    TemplatesQueryBehavior["Include"] = "Include";
+    /** Exclude templates from results. */
+    TemplatesQueryBehavior["Exclude"] = "Exclude";
+    /** Results *only* includes templates. */
+    TemplatesQueryBehavior["Only"] = "Only";
+})(TemplatesQueryBehavior || (TemplatesQueryBehavior = {}));
+var TagQueryBehavior;
+(function (TagQueryBehavior) {
+    /** Returns resources which have strictly all the tags */
+    TagQueryBehavior["All"] = "All";
+    /** Returns resources which have one or more of the tags */
+    TagQueryBehavior["Any"] = "Any";
+})(TagQueryBehavior || (TagQueryBehavior = {}));
+/** Types of maintenance schedules */
+var MaintenanceScheduleType;
+(function (MaintenanceScheduleType) {
+    /** Daily at the specified time */
+    MaintenanceScheduleType["Daily"] = "Daily";
+    /** Weekly on the specified day and time */
+    MaintenanceScheduleType["Weekly"] = "Weekly";
+    /** One-time maintenance on a specific date and time */
+    MaintenanceScheduleType["OneTime"] = "OneTime";
+})(MaintenanceScheduleType || (MaintenanceScheduleType = {}));
+var Operation;
+(function (Operation) {
+    Operation["None"] = "None";
+    Operation["CreateServer"] = "CreateServer";
+    Operation["UpdateServer"] = "UpdateServer";
+    Operation["DeleteServer"] = "DeleteServer";
+    Operation["RenameServer"] = "RenameServer";
+    Operation["StartContainer"] = "StartContainer";
+    Operation["RestartContainer"] = "RestartContainer";
+    Operation["PauseContainer"] = "PauseContainer";
+    Operation["UnpauseContainer"] = "UnpauseContainer";
+    Operation["StopContainer"] = "StopContainer";
+    Operation["DestroyContainer"] = "DestroyContainer";
+    Operation["StartAllContainers"] = "StartAllContainers";
+    Operation["RestartAllContainers"] = "RestartAllContainers";
+    Operation["PauseAllContainers"] = "PauseAllContainers";
+    Operation["UnpauseAllContainers"] = "UnpauseAllContainers";
+    Operation["StopAllContainers"] = "StopAllContainers";
+    Operation["PruneContainers"] = "PruneContainers";
+    Operation["CreateNetwork"] = "CreateNetwork";
+    Operation["DeleteNetwork"] = "DeleteNetwork";
+    Operation["PruneNetworks"] = "PruneNetworks";
+    Operation["DeleteImage"] = "DeleteImage";
+    Operation["PruneImages"] = "PruneImages";
+    Operation["DeleteVolume"] = "DeleteVolume";
+    Operation["PruneVolumes"] = "PruneVolumes";
+    Operation["PruneDockerBuilders"] = "PruneDockerBuilders";
+    Operation["PruneBuildx"] = "PruneBuildx";
+    Operation["PruneSystem"] = "PruneSystem";
+    Operation["CreateStack"] = "CreateStack";
+    Operation["UpdateStack"] = "UpdateStack";
+    Operation["RenameStack"] = "RenameStack";
+    Operation["DeleteStack"] = "DeleteStack";
+    Operation["WriteStackContents"] = "WriteStackContents";
+    Operation["RefreshStackCache"] = "RefreshStackCache";
+    Operation["PullStack"] = "PullStack";
+    Operation["DeployStack"] = "DeployStack";
+    Operation["StartStack"] = "StartStack";
+    Operation["RestartStack"] = "RestartStack";
+    Operation["PauseStack"] = "PauseStack";
+    Operation["UnpauseStack"] = "UnpauseStack";
+    Operation["StopStack"] = "StopStack";
+    Operation["DestroyStack"] = "DestroyStack";
+    Operation["RunStackService"] = "RunStackService";
+    Operation["DeployStackService"] = "DeployStackService";
+    Operation["PullStackService"] = "PullStackService";
+    Operation["StartStackService"] = "StartStackService";
+    Operation["RestartStackService"] = "RestartStackService";
+    Operation["PauseStackService"] = "PauseStackService";
+    Operation["UnpauseStackService"] = "UnpauseStackService";
+    Operation["StopStackService"] = "StopStackService";
+    Operation["DestroyStackService"] = "DestroyStackService";
+    Operation["CreateDeployment"] = "CreateDeployment";
+    Operation["UpdateDeployment"] = "UpdateDeployment";
+    Operation["RenameDeployment"] = "RenameDeployment";
+    Operation["DeleteDeployment"] = "DeleteDeployment";
+    Operation["Deploy"] = "Deploy";
+    Operation["PullDeployment"] = "PullDeployment";
+    Operation["StartDeployment"] = "StartDeployment";
+    Operation["RestartDeployment"] = "RestartDeployment";
+    Operation["PauseDeployment"] = "PauseDeployment";
+    Operation["UnpauseDeployment"] = "UnpauseDeployment";
+    Operation["StopDeployment"] = "StopDeployment";
+    Operation["DestroyDeployment"] = "DestroyDeployment";
+    Operation["CreateBuild"] = "CreateBuild";
+    Operation["UpdateBuild"] = "UpdateBuild";
+    Operation["RenameBuild"] = "RenameBuild";
+    Operation["DeleteBuild"] = "DeleteBuild";
+    Operation["RunBuild"] = "RunBuild";
+    Operation["CancelBuild"] = "CancelBuild";
+    Operation["WriteDockerfile"] = "WriteDockerfile";
+    Operation["CreateRepo"] = "CreateRepo";
+    Operation["UpdateRepo"] = "UpdateRepo";
+    Operation["RenameRepo"] = "RenameRepo";
+    Operation["DeleteRepo"] = "DeleteRepo";
+    Operation["CloneRepo"] = "CloneRepo";
+    Operation["PullRepo"] = "PullRepo";
+    Operation["BuildRepo"] = "BuildRepo";
+    Operation["CancelRepoBuild"] = "CancelRepoBuild";
+    Operation["CreateProcedure"] = "CreateProcedure";
+    Operation["UpdateProcedure"] = "UpdateProcedure";
+    Operation["RenameProcedure"] = "RenameProcedure";
+    Operation["DeleteProcedure"] = "DeleteProcedure";
+    Operation["RunProcedure"] = "RunProcedure";
+    Operation["CreateAction"] = "CreateAction";
+    Operation["UpdateAction"] = "UpdateAction";
+    Operation["RenameAction"] = "RenameAction";
+    Operation["DeleteAction"] = "DeleteAction";
+    Operation["RunAction"] = "RunAction";
+    Operation["CreateBuilder"] = "CreateBuilder";
+    Operation["UpdateBuilder"] = "UpdateBuilder";
+    Operation["RenameBuilder"] = "RenameBuilder";
+    Operation["DeleteBuilder"] = "DeleteBuilder";
+    Operation["CreateAlerter"] = "CreateAlerter";
+    Operation["UpdateAlerter"] = "UpdateAlerter";
+    Operation["RenameAlerter"] = "RenameAlerter";
+    Operation["DeleteAlerter"] = "DeleteAlerter";
+    Operation["TestAlerter"] = "TestAlerter";
+    Operation["SendAlert"] = "SendAlert";
+    Operation["CreateResourceSync"] = "CreateResourceSync";
+    Operation["UpdateResourceSync"] = "UpdateResourceSync";
+    Operation["RenameResourceSync"] = "RenameResourceSync";
+    Operation["DeleteResourceSync"] = "DeleteResourceSync";
+    Operation["WriteSyncContents"] = "WriteSyncContents";
+    Operation["CommitSync"] = "CommitSync";
+    Operation["RunSync"] = "RunSync";
+    Operation["ClearRepoCache"] = "ClearRepoCache";
+    Operation["BackupCoreDatabase"] = "BackupCoreDatabase";
+    Operation["GlobalAutoUpdate"] = "GlobalAutoUpdate";
+    Operation["CreateVariable"] = "CreateVariable";
+    Operation["UpdateVariableValue"] = "UpdateVariableValue";
+    Operation["DeleteVariable"] = "DeleteVariable";
+    Operation["CreateGitProviderAccount"] = "CreateGitProviderAccount";
+    Operation["UpdateGitProviderAccount"] = "UpdateGitProviderAccount";
+    Operation["DeleteGitProviderAccount"] = "DeleteGitProviderAccount";
+    Operation["CreateDockerRegistryAccount"] = "CreateDockerRegistryAccount";
+    Operation["UpdateDockerRegistryAccount"] = "UpdateDockerRegistryAccount";
+    Operation["DeleteDockerRegistryAccount"] = "DeleteDockerRegistryAccount";
+})(Operation || (Operation = {}));
+/** An update's status */
+var UpdateStatus;
+(function (UpdateStatus) {
+    /** The run is in the system but hasn't started yet */
+    UpdateStatus["Queued"] = "Queued";
+    /** The run is currently running */
+    UpdateStatus["InProgress"] = "InProgress";
+    /** The run is complete */
+    UpdateStatus["Complete"] = "Complete";
+})(UpdateStatus || (UpdateStatus = {}));
+var BuildState;
+(function (BuildState) {
+    /** Currently building */
+    BuildState["Building"] = "Building";
+    /** Last build successful (or never built) */
+    BuildState["Ok"] = "Ok";
+    /** Last build failed */
+    BuildState["Failed"] = "Failed";
+    /** Other case */
+    BuildState["Unknown"] = "Unknown";
+})(BuildState || (BuildState = {}));
+var RestartMode;
+(function (RestartMode) {
+    RestartMode["NoRestart"] = "no";
+    RestartMode["OnFailure"] = "on-failure";
+    RestartMode["Always"] = "always";
+    RestartMode["UnlessStopped"] = "unless-stopped";
+})(RestartMode || (RestartMode = {}));
+var TerminationSignal;
+(function (TerminationSignal) {
+    TerminationSignal["SigHup"] = "SIGHUP";
+    TerminationSignal["SigInt"] = "SIGINT";
+    TerminationSignal["SigQuit"] = "SIGQUIT";
+    TerminationSignal["SigTerm"] = "SIGTERM";
+})(TerminationSignal || (TerminationSignal = {}));
+/**
+ * Variants de/serialized from/to snake_case.
+ *
+ * Eg.
+ * - NotDeployed -> not_deployed
+ * - Restarting -> restarting
+ * - Running -> running.
+ */
+var DeploymentState;
+(function (DeploymentState) {
+    /** The deployment is currently re/deploying */
+    DeploymentState["Deploying"] = "deploying";
+    /** Container is running */
+    DeploymentState["Running"] = "running";
+    /** Container is created but not running */
+    DeploymentState["Created"] = "created";
+    /** Container is in restart loop */
+    DeploymentState["Restarting"] = "restarting";
+    /** Container is being removed */
+    DeploymentState["Removing"] = "removing";
+    /** Container is paused */
+    DeploymentState["Paused"] = "paused";
+    /** Container is exited */
+    DeploymentState["Exited"] = "exited";
+    /** Container is dead */
+    DeploymentState["Dead"] = "dead";
+    /** The deployment is not deployed (no matching container) */
+    DeploymentState["NotDeployed"] = "not_deployed";
+    /** Server not reachable for status */
+    DeploymentState["Unknown"] = "unknown";
+})(DeploymentState || (DeploymentState = {}));
+/** Severity level of problem. */
+var SeverityLevel;
+(function (SeverityLevel) {
+    /**
+     * No problem.
+     *
+     * Aliases: ok, low, l
+     */
+    SeverityLevel["Ok"] = "OK";
+    /**
+     * Problem is imminent.
+     *
+     * Aliases: warning, w, medium, m
+     */
+    SeverityLevel["Warning"] = "WARNING";
+    /**
+     * Problem fully realized.
+     *
+     * Aliases: critical, c, high, h
+     */
+    SeverityLevel["Critical"] = "CRITICAL";
+})(SeverityLevel || (SeverityLevel = {}));
+var StackFileRequires;
+(function (StackFileRequires) {
+    /** Diff requires service redeploy. */
+    StackFileRequires["Redeploy"] = "Redeploy";
+    /** Diff requires service restart */
+    StackFileRequires["Restart"] = "Restart";
+    /** Diff requires no action. Default. */
+    StackFileRequires["None"] = "None";
+})(StackFileRequires || (StackFileRequires = {}));
+var Timelength;
+(function (Timelength) {
+    /** `1-sec` */
+    Timelength["OneSecond"] = "1-sec";
+    /** `5-sec` */
+    Timelength["FiveSeconds"] = "5-sec";
+    /** `10-sec` */
+    Timelength["TenSeconds"] = "10-sec";
+    /** `15-sec` */
+    Timelength["FifteenSeconds"] = "15-sec";
+    /** `30-sec` */
+    Timelength["ThirtySeconds"] = "30-sec";
+    /** `1-min` */
+    Timelength["OneMinute"] = "1-min";
+    /** `2-min` */
+    Timelength["TwoMinutes"] = "2-min";
+    /** `5-min` */
+    Timelength["FiveMinutes"] = "5-min";
+    /** `10-min` */
+    Timelength["TenMinutes"] = "10-min";
+    /** `15-min` */
+    Timelength["FifteenMinutes"] = "15-min";
+    /** `30-min` */
+    Timelength["ThirtyMinutes"] = "30-min";
+    /** `1-hr` */
+    Timelength["OneHour"] = "1-hr";
+    /** `2-hr` */
+    Timelength["TwoHours"] = "2-hr";
+    /** `6-hr` */
+    Timelength["SixHours"] = "6-hr";
+    /** `8-hr` */
+    Timelength["EightHours"] = "8-hr";
+    /** `12-hr` */
+    Timelength["TwelveHours"] = "12-hr";
+    /** `1-day` */
+    Timelength["OneDay"] = "1-day";
+    /** `3-day` */
+    Timelength["ThreeDay"] = "3-day";
+    /** `1-wk` */
+    Timelength["OneWeek"] = "1-wk";
+    /** `2-wk` */
+    Timelength["TwoWeeks"] = "2-wk";
+    /** `30-day` */
+    Timelength["ThirtyDays"] = "30-day";
+})(Timelength || (Timelength = {}));
+var TagColor;
+(function (TagColor) {
+    TagColor["LightSlate"] = "LightSlate";
+    TagColor["Slate"] = "Slate";
+    TagColor["DarkSlate"] = "DarkSlate";
+    TagColor["LightRed"] = "LightRed";
+    TagColor["Red"] = "Red";
+    TagColor["DarkRed"] = "DarkRed";
+    TagColor["LightOrange"] = "LightOrange";
+    TagColor["Orange"] = "Orange";
+    TagColor["DarkOrange"] = "DarkOrange";
+    TagColor["LightAmber"] = "LightAmber";
+    TagColor["Amber"] = "Amber";
+    TagColor["DarkAmber"] = "DarkAmber";
+    TagColor["LightYellow"] = "LightYellow";
+    TagColor["Yellow"] = "Yellow";
+    TagColor["DarkYellow"] = "DarkYellow";
+    TagColor["LightLime"] = "LightLime";
+    TagColor["Lime"] = "Lime";
+    TagColor["DarkLime"] = "DarkLime";
+    TagColor["LightGreen"] = "LightGreen";
+    TagColor["Green"] = "Green";
+    TagColor["DarkGreen"] = "DarkGreen";
+    TagColor["LightEmerald"] = "LightEmerald";
+    TagColor["Emerald"] = "Emerald";
+    TagColor["DarkEmerald"] = "DarkEmerald";
+    TagColor["LightTeal"] = "LightTeal";
+    TagColor["Teal"] = "Teal";
+    TagColor["DarkTeal"] = "DarkTeal";
+    TagColor["LightCyan"] = "LightCyan";
+    TagColor["Cyan"] = "Cyan";
+    TagColor["DarkCyan"] = "DarkCyan";
+    TagColor["LightSky"] = "LightSky";
+    TagColor["Sky"] = "Sky";
+    TagColor["DarkSky"] = "DarkSky";
+    TagColor["LightBlue"] = "LightBlue";
+    TagColor["Blue"] = "Blue";
+    TagColor["DarkBlue"] = "DarkBlue";
+    TagColor["LightIndigo"] = "LightIndigo";
+    TagColor["Indigo"] = "Indigo";
+    TagColor["DarkIndigo"] = "DarkIndigo";
+    TagColor["LightViolet"] = "LightViolet";
+    TagColor["Violet"] = "Violet";
+    TagColor["DarkViolet"] = "DarkViolet";
+    TagColor["LightPurple"] = "LightPurple";
+    TagColor["Purple"] = "Purple";
+    TagColor["DarkPurple"] = "DarkPurple";
+    TagColor["LightFuchsia"] = "LightFuchsia";
+    TagColor["Fuchsia"] = "Fuchsia";
+    TagColor["DarkFuchsia"] = "DarkFuchsia";
+    TagColor["LightPink"] = "LightPink";
+    TagColor["Pink"] = "Pink";
+    TagColor["DarkPink"] = "DarkPink";
+    TagColor["LightRose"] = "LightRose";
+    TagColor["Rose"] = "Rose";
+    TagColor["DarkRose"] = "DarkRose";
+})(TagColor || (TagColor = {}));
+var ContainerStateStatusEnum;
+(function (ContainerStateStatusEnum) {
+    ContainerStateStatusEnum["Running"] = "running";
+    ContainerStateStatusEnum["Created"] = "created";
+    ContainerStateStatusEnum["Paused"] = "paused";
+    ContainerStateStatusEnum["Restarting"] = "restarting";
+    ContainerStateStatusEnum["Exited"] = "exited";
+    ContainerStateStatusEnum["Removing"] = "removing";
+    ContainerStateStatusEnum["Dead"] = "dead";
+    ContainerStateStatusEnum["Empty"] = "";
+})(ContainerStateStatusEnum || (ContainerStateStatusEnum = {}));
+var HealthStatusEnum;
+(function (HealthStatusEnum) {
+    HealthStatusEnum["Empty"] = "";
+    HealthStatusEnum["None"] = "none";
+    HealthStatusEnum["Starting"] = "starting";
+    HealthStatusEnum["Healthy"] = "healthy";
+    HealthStatusEnum["Unhealthy"] = "unhealthy";
+})(HealthStatusEnum || (HealthStatusEnum = {}));
+var RestartPolicyNameEnum;
+(function (RestartPolicyNameEnum) {
+    RestartPolicyNameEnum["Empty"] = "";
+    RestartPolicyNameEnum["No"] = "no";
+    RestartPolicyNameEnum["Always"] = "always";
+    RestartPolicyNameEnum["UnlessStopped"] = "unless-stopped";
+    RestartPolicyNameEnum["OnFailure"] = "on-failure";
+})(RestartPolicyNameEnum || (RestartPolicyNameEnum = {}));
+var MountTypeEnum;
+(function (MountTypeEnum) {
+    MountTypeEnum["Empty"] = "";
+    MountTypeEnum["Bind"] = "bind";
+    MountTypeEnum["Volume"] = "volume";
+    MountTypeEnum["Image"] = "image";
+    MountTypeEnum["Tmpfs"] = "tmpfs";
+    MountTypeEnum["Npipe"] = "npipe";
+    MountTypeEnum["Cluster"] = "cluster";
+})(MountTypeEnum || (MountTypeEnum = {}));
+var MountBindOptionsPropagationEnum;
+(function (MountBindOptionsPropagationEnum) {
+    MountBindOptionsPropagationEnum["Empty"] = "";
+    MountBindOptionsPropagationEnum["Private"] = "private";
+    MountBindOptionsPropagationEnum["Rprivate"] = "rprivate";
+    MountBindOptionsPropagationEnum["Shared"] = "shared";
+    MountBindOptionsPropagationEnum["Rshared"] = "rshared";
+    MountBindOptionsPropagationEnum["Slave"] = "slave";
+    MountBindOptionsPropagationEnum["Rslave"] = "rslave";
+})(MountBindOptionsPropagationEnum || (MountBindOptionsPropagationEnum = {}));
+var HostConfigCgroupnsModeEnum;
+(function (HostConfigCgroupnsModeEnum) {
+    HostConfigCgroupnsModeEnum["Empty"] = "";
+    HostConfigCgroupnsModeEnum["Private"] = "private";
+    HostConfigCgroupnsModeEnum["Host"] = "host";
+})(HostConfigCgroupnsModeEnum || (HostConfigCgroupnsModeEnum = {}));
+var HostConfigIsolationEnum;
+(function (HostConfigIsolationEnum) {
+    HostConfigIsolationEnum["Empty"] = "";
+    HostConfigIsolationEnum["Default"] = "default";
+    HostConfigIsolationEnum["Process"] = "process";
+    HostConfigIsolationEnum["Hyperv"] = "hyperv";
+})(HostConfigIsolationEnum || (HostConfigIsolationEnum = {}));
+var VolumeScopeEnum;
+(function (VolumeScopeEnum) {
+    VolumeScopeEnum["Empty"] = "";
+    VolumeScopeEnum["Local"] = "local";
+    VolumeScopeEnum["Global"] = "global";
+})(VolumeScopeEnum || (VolumeScopeEnum = {}));
+var ClusterVolumeSpecAccessModeScopeEnum;
+(function (ClusterVolumeSpecAccessModeScopeEnum) {
+    ClusterVolumeSpecAccessModeScopeEnum["Empty"] = "";
+    ClusterVolumeSpecAccessModeScopeEnum["Single"] = "single";
+    ClusterVolumeSpecAccessModeScopeEnum["Multi"] = "multi";
+})(ClusterVolumeSpecAccessModeScopeEnum || (ClusterVolumeSpecAccessModeScopeEnum = {}));
+var ClusterVolumeSpecAccessModeSharingEnum;
+(function (ClusterVolumeSpecAccessModeSharingEnum) {
+    ClusterVolumeSpecAccessModeSharingEnum["Empty"] = "";
+    ClusterVolumeSpecAccessModeSharingEnum["None"] = "none";
+    ClusterVolumeSpecAccessModeSharingEnum["Readonly"] = "readonly";
+    ClusterVolumeSpecAccessModeSharingEnum["Onewriter"] = "onewriter";
+    ClusterVolumeSpecAccessModeSharingEnum["All"] = "all";
+})(ClusterVolumeSpecAccessModeSharingEnum || (ClusterVolumeSpecAccessModeSharingEnum = {}));
+var ClusterVolumeSpecAccessModeAvailabilityEnum;
+(function (ClusterVolumeSpecAccessModeAvailabilityEnum) {
+    ClusterVolumeSpecAccessModeAvailabilityEnum["Empty"] = "";
+    ClusterVolumeSpecAccessModeAvailabilityEnum["Active"] = "active";
+    ClusterVolumeSpecAccessModeAvailabilityEnum["Pause"] = "pause";
+    ClusterVolumeSpecAccessModeAvailabilityEnum["Drain"] = "drain";
+})(ClusterVolumeSpecAccessModeAvailabilityEnum || (ClusterVolumeSpecAccessModeAvailabilityEnum = {}));
+var ClusterVolumePublishStatusStateEnum;
+(function (ClusterVolumePublishStatusStateEnum) {
+    ClusterVolumePublishStatusStateEnum["Empty"] = "";
+    ClusterVolumePublishStatusStateEnum["PendingPublish"] = "pending-publish";
+    ClusterVolumePublishStatusStateEnum["Published"] = "published";
+    ClusterVolumePublishStatusStateEnum["PendingNodeUnpublish"] = "pending-node-unpublish";
+    ClusterVolumePublishStatusStateEnum["PendingControllerUnpublish"] = "pending-controller-unpublish";
+})(ClusterVolumePublishStatusStateEnum || (ClusterVolumePublishStatusStateEnum = {}));
+var PortTypeEnum;
+(function (PortTypeEnum) {
+    PortTypeEnum["EMPTY"] = "";
+    PortTypeEnum["TCP"] = "tcp";
+    PortTypeEnum["UDP"] = "udp";
+    PortTypeEnum["SCTP"] = "sctp";
+})(PortTypeEnum || (PortTypeEnum = {}));
+var ProcedureState;
+(function (ProcedureState) {
+    /** Currently running */
+    ProcedureState["Running"] = "Running";
+    /** Last run successful */
+    ProcedureState["Ok"] = "Ok";
+    /** Last run failed */
+    ProcedureState["Failed"] = "Failed";
+    /** Other case (never run) */
+    ProcedureState["Unknown"] = "Unknown";
+})(ProcedureState || (ProcedureState = {}));
+var RepoState;
+(function (RepoState) {
+    /** Unknown case */
+    RepoState["Unknown"] = "Unknown";
+    /** Last clone / pull successful (or never cloned) */
+    RepoState["Ok"] = "Ok";
+    /** Last clone / pull failed */
+    RepoState["Failed"] = "Failed";
+    /** Currently cloning */
+    RepoState["Cloning"] = "Cloning";
+    /** Currently pulling */
+    RepoState["Pulling"] = "Pulling";
+    /** Currently building */
+    RepoState["Building"] = "Building";
+})(RepoState || (RepoState = {}));
+var ResourceSyncState;
+(function (ResourceSyncState) {
+    /** Currently syncing */
+    ResourceSyncState["Syncing"] = "Syncing";
+    /** Updates pending */
+    ResourceSyncState["Pending"] = "Pending";
+    /** Last sync successful (or never synced). No Changes pending */
+    ResourceSyncState["Ok"] = "Ok";
+    /** Last sync failed */
+    ResourceSyncState["Failed"] = "Failed";
+    /** Other case */
+    ResourceSyncState["Unknown"] = "Unknown";
+})(ResourceSyncState || (ResourceSyncState = {}));
+var ServerState;
+(function (ServerState) {
+    /** Server health check passing. */
+    ServerState["Ok"] = "Ok";
+    /** Server is unreachable. */
+    ServerState["NotOk"] = "NotOk";
+    /** Server is disabled. */
+    ServerState["Disabled"] = "Disabled";
+})(ServerState || (ServerState = {}));
+var StackState;
+(function (StackState) {
+    /** The stack is currently re/deploying */
+    StackState["Deploying"] = "deploying";
+    /** All containers are running. */
+    StackState["Running"] = "running";
+    /** All containers are paused */
+    StackState["Paused"] = "paused";
+    /** All contianers are stopped */
+    StackState["Stopped"] = "stopped";
+    /** All containers are created */
+    StackState["Created"] = "created";
+    /** All containers are restarting */
+    StackState["Restarting"] = "restarting";
+    /** All containers are dead */
+    StackState["Dead"] = "dead";
+    /** All containers are removing */
+    StackState["Removing"] = "removing";
+    /** The containers are in a mix of states */
+    StackState["Unhealthy"] = "unhealthy";
+    /** The stack is not deployed */
+    StackState["Down"] = "down";
+    /** Server not reachable for status */
+    StackState["Unknown"] = "unknown";
+})(StackState || (StackState = {}));
+var RepoWebhookAction;
+(function (RepoWebhookAction) {
+    RepoWebhookAction["Clone"] = "Clone";
+    RepoWebhookAction["Pull"] = "Pull";
+    RepoWebhookAction["Build"] = "Build";
+})(RepoWebhookAction || (RepoWebhookAction = {}));
+var StackWebhookAction;
+(function (StackWebhookAction) {
+    StackWebhookAction["Refresh"] = "Refresh";
+    StackWebhookAction["Deploy"] = "Deploy";
+})(StackWebhookAction || (StackWebhookAction = {}));
+var SyncWebhookAction;
+(function (SyncWebhookAction) {
+    SyncWebhookAction["Refresh"] = "Refresh";
+    SyncWebhookAction["Sync"] = "Sync";
+})(SyncWebhookAction || (SyncWebhookAction = {}));
+/**
+ * Configures the behavior of [CreateTerminal] if the
+ * specified terminal name already exists.
+ */
+var TerminalRecreateMode;
+(function (TerminalRecreateMode) {
+    /**
+     * Never kill the old terminal if it already exists.
+     * If the command is different, returns error.
+     */
+    TerminalRecreateMode["Never"] = "Never";
+    /** Always kill the old terminal and create new one */
+    TerminalRecreateMode["Always"] = "Always";
+    /** Only kill and recreate if the command is different. */
+    TerminalRecreateMode["DifferentCommand"] = "DifferentCommand";
+})(TerminalRecreateMode || (TerminalRecreateMode = {}));
+var DefaultRepoFolder;
+(function (DefaultRepoFolder) {
+    /** /${root_directory}/stacks */
+    DefaultRepoFolder["Stacks"] = "Stacks";
+    /** /${root_directory}/builds */
+    DefaultRepoFolder["Builds"] = "Builds";
+    /** /${root_directory}/repos */
+    DefaultRepoFolder["Repos"] = "Repos";
+    /**
+     * If the repo is only cloned
+     * in the core repo cache (resource sync),
+     * this isn't relevant.
+     */
+    DefaultRepoFolder["NotApplicable"] = "NotApplicable";
+})(DefaultRepoFolder || (DefaultRepoFolder = {}));
+var SearchCombinator;
+(function (SearchCombinator) {
+    SearchCombinator["Or"] = "Or";
+    SearchCombinator["And"] = "And";
+})(SearchCombinator || (SearchCombinator = {}));
+/** Days of the week */
+var DayOfWeek;
+(function (DayOfWeek) {
+    DayOfWeek["Monday"] = "Monday";
+    DayOfWeek["Tuesday"] = "Tuesday";
+    DayOfWeek["Wednesday"] = "Wednesday";
+    DayOfWeek["Thursday"] = "Thursday";
+    DayOfWeek["Friday"] = "Friday";
+    DayOfWeek["Saturday"] = "Saturday";
+    DayOfWeek["Sunday"] = "Sunday";
+})(DayOfWeek || (DayOfWeek = {}));
+/**
+ * One representative IANA zone for each distinct base UTC offset in the tz database.
+ * https://en.wikipedia.org/wiki/List_of_tz_database_time_zones.
+ *
+ * The `serde`/`strum` renames ensure the canonical identifier is used
+ * when serializing or parsing from a string such as `"Etc/UTC"`.
+ */
+var IanaTimezone;
+(function (IanaTimezone) {
+    /** UTC−12:00 */
+    IanaTimezone["EtcGmtMinus12"] = "Etc/GMT+12";
+    /** UTC−11:00 */
+    IanaTimezone["PacificPagoPago"] = "Pacific/Pago_Pago";
+    /** UTC−10:00 */
+    IanaTimezone["PacificHonolulu"] = "Pacific/Honolulu";
+    /** UTC−09:30 */
+    IanaTimezone["PacificMarquesas"] = "Pacific/Marquesas";
+    /** UTC−09:00 */
+    IanaTimezone["AmericaAnchorage"] = "America/Anchorage";
+    /** UTC−08:00 */
+    IanaTimezone["AmericaLosAngeles"] = "America/Los_Angeles";
+    /** UTC−07:00 */
+    IanaTimezone["AmericaDenver"] = "America/Denver";
+    /** UTC−06:00 */
+    IanaTimezone["AmericaChicago"] = "America/Chicago";
+    /** UTC−05:00 */
+    IanaTimezone["AmericaNewYork"] = "America/New_York";
+    /** UTC−04:00 */
+    IanaTimezone["AmericaHalifax"] = "America/Halifax";
+    /** UTC−03:30 */
+    IanaTimezone["AmericaStJohns"] = "America/St_Johns";
+    /** UTC−03:00 */
+    IanaTimezone["AmericaSaoPaulo"] = "America/Sao_Paulo";
+    /** UTC−02:00 */
+    IanaTimezone["AmericaNoronha"] = "America/Noronha";
+    /** UTC−01:00 */
+    IanaTimezone["AtlanticAzores"] = "Atlantic/Azores";
+    /** UTC±00:00 */
+    IanaTimezone["EtcUtc"] = "Etc/UTC";
+    /** UTC+01:00 */
+    IanaTimezone["EuropeBerlin"] = "Europe/Berlin";
+    /** UTC+02:00 */
+    IanaTimezone["EuropeBucharest"] = "Europe/Bucharest";
+    /** UTC+03:00 */
+    IanaTimezone["EuropeMoscow"] = "Europe/Moscow";
+    /** UTC+03:30 */
+    IanaTimezone["AsiaTehran"] = "Asia/Tehran";
+    /** UTC+04:00 */
+    IanaTimezone["AsiaDubai"] = "Asia/Dubai";
+    /** UTC+04:30 */
+    IanaTimezone["AsiaKabul"] = "Asia/Kabul";
+    /** UTC+05:00 */
+    IanaTimezone["AsiaKarachi"] = "Asia/Karachi";
+    /** UTC+05:30 */
+    IanaTimezone["AsiaKolkata"] = "Asia/Kolkata";
+    /** UTC+05:45 */
+    IanaTimezone["AsiaKathmandu"] = "Asia/Kathmandu";
+    /** UTC+06:00 */
+    IanaTimezone["AsiaDhaka"] = "Asia/Dhaka";
+    /** UTC+06:30 */
+    IanaTimezone["AsiaYangon"] = "Asia/Yangon";
+    /** UTC+07:00 */
+    IanaTimezone["AsiaBangkok"] = "Asia/Bangkok";
+    /** UTC+08:00 */
+    IanaTimezone["AsiaShanghai"] = "Asia/Shanghai";
+    /** UTC+08:45 */
+    IanaTimezone["AustraliaEucla"] = "Australia/Eucla";
+    /** UTC+09:00 */
+    IanaTimezone["AsiaTokyo"] = "Asia/Tokyo";
+    /** UTC+09:30 */
+    IanaTimezone["AustraliaAdelaide"] = "Australia/Adelaide";
+    /** UTC+10:00 */
+    IanaTimezone["AustraliaSydney"] = "Australia/Sydney";
+    /** UTC+10:30 */
+    IanaTimezone["AustraliaLordHowe"] = "Australia/Lord_Howe";
+    /** UTC+11:00 */
+    IanaTimezone["PacificPortMoresby"] = "Pacific/Port_Moresby";
+    /** UTC+12:00 */
+    IanaTimezone["PacificAuckland"] = "Pacific/Auckland";
+    /** UTC+12:45 */
+    IanaTimezone["PacificChatham"] = "Pacific/Chatham";
+    /** UTC+13:00 */
+    IanaTimezone["PacificTongatapu"] = "Pacific/Tongatapu";
+    /** UTC+14:00 */
+    IanaTimezone["PacificKiritimati"] = "Pacific/Kiritimati";
+})(IanaTimezone || (IanaTimezone = {}));
+/** The specific types of permission that a User or UserGroup can have on a resource. */
+var SpecificPermission;
+(function (SpecificPermission) {
+    /**
+     * On **Server**
+     * - Access the terminal apis
+     * On **Stack / Deployment**
+     * - Access the container exec Apis
+     */
+    SpecificPermission["Terminal"] = "Terminal";
+    /**
+     * On **Server**
+     * - Allowed to attach Stacks, Deployments, Repos, Builders to the Server
+     * On **Builder**
+     * - Allowed to attach Builds to the Builder
+     * On **Build**
+     * - Allowed to attach Deployments to the Build
+     */
+    SpecificPermission["Attach"] = "Attach";
+    /**
+     * On **Server**
+     * - Access the `container inspect` apis
+     * On **Stack / Deployment**
+     * - Access `container inspect` apis for associated containers
+     */
+    SpecificPermission["Inspect"] = "Inspect";
+    /**
+     * On **Server**
+     * - Read all container logs on the server
+     * On **Stack / Deployment**
+     * - Read the container logs
+     */
+    SpecificPermission["Logs"] = "Logs";
+    /**
+     * On **Server**
+     * - Read all the processes on the host
+     */
+    SpecificPermission["Processes"] = "Processes";
+})(SpecificPermission || (SpecificPermission = {}));
+
+class CancelToken {
+    cancelled;
+    constructor() {
+        this.cancelled = false;
+    }
+    cancel() {
+        this.cancelled = true;
+    }
+}
+/** Initialize a new client for Komodo */
+function KomodoClient(url, options) {
+    const state = {
+        jwt: undefined,
+        key: options.params.key ,
+        secret: options.params.secret ,
+    };
+    const request = (path, type, params) => new Promise(async (res, rej) => {
+        try {
+            let response = await fetch(`${url}${path}/${type}`, {
+                method: "POST",
+                body: JSON.stringify(params),
+                headers: {
+                    ...(state.jwt
+                        ? {
+                            authorization: state.jwt,
+                        }
+                        : state.key && state.secret
+                            ? {
+                                "x-api-key": state.key,
+                                "x-api-secret": state.secret,
+                            }
+                            : {}),
+                    "content-type": "application/json",
+                },
+            });
+            if (response.status === 200) {
+                const body = await response.json();
+                res(body);
+            }
+            else {
+                try {
+                    const result = await response.json();
+                    rej({ status: response.status, result });
+                }
+                catch (error) {
+                    rej({
+                        status: response.status,
+                        result: {
+                            error: "Failed to get response body",
+                            trace: [JSON.stringify(error)],
+                        },
+                        error,
+                    });
+                }
+            }
+        }
+        catch (error) {
+            rej({
+                status: 1,
+                result: {
+                    error: "Request failed with error",
+                    trace: [JSON.stringify(error)],
+                },
+                error,
+            });
+        }
+    });
+    const auth = async (type, params) => await request("/auth", type, params);
+    const user = async (type, params) => await request("/user", type, params);
+    const read = async (type, params) => await request("/read", type, params);
+    const write = async (type, params) => await request("/write", type, params);
+    const execute = async (type, params) => await request("/execute", type, params);
+    const execute_and_poll = async (type, params) => {
+        const res = await execute(type, params);
+        // Check if its a batch of updates or a single update;
+        if (Array.isArray(res)) {
+            const batch = res;
+            return await Promise.all(batch.map(async (item) => {
+                if (item.status === "Err") {
+                    return item;
+                }
+                return await poll_update_until_complete(item.data._id?.$oid);
+            }));
+        }
+        else {
+            // it is a single update
+            const update = res;
+            if (update.status === UpdateStatus.Complete || !update._id?.$oid) {
+                return update;
+            }
+            return await poll_update_until_complete(update._id?.$oid);
+        }
+    };
+    const poll_update_until_complete = async (update_id) => {
+        while (true) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            const update = await read("GetUpdate", { id: update_id });
+            if (update.status === UpdateStatus.Complete) {
+                return update;
+            }
+        }
+    };
+    const core_version = () => read("GetVersion", {}).then((res) => res.version);
+    const get_update_websocket = ({ on_update, on_login, on_open, on_close, }) => {
+        const ws = new WebSocket(url.replace("http", "ws") + "/ws/update");
+        // Handle login on websocket open
+        ws.addEventListener("open", () => {
+            on_open?.();
+            const login_msg = {
+                    type: "ApiKeys",
+                    params: {
+                        key: options.params.key,
+                        secret: options.params.secret,
+                    },
+                };
+            ws.send(JSON.stringify(login_msg));
+        });
+        ws.addEventListener("message", ({ data }) => {
+            if (data == "LOGGED_IN")
+                return on_login?.();
+            on_update(JSON.parse(data));
+        });
+        if (on_close) {
+            ws.addEventListener("close", on_close);
+        }
+        return ws;
+    };
+    const subscribe_to_update_websocket = async ({ on_update, on_open, on_login, on_close, retry = true, retry_timeout_ms = 5_000, cancel = new CancelToken(), on_cancel, }) => {
+        while (true) {
+            if (cancel.cancelled) {
+                on_cancel?.();
+                return;
+            }
+            try {
+                const ws = get_update_websocket({
+                    on_open,
+                    on_login,
+                    on_update,
+                    on_close,
+                });
+                // This while loop will end when the socket is closed
+                while (ws.readyState !== WebSocket.CLOSING &&
+                    ws.readyState !== WebSocket.CLOSED) {
+                    if (cancel.cancelled)
+                        ws.close();
+                    // Sleep for a bit before checking for websocket closed
+                    await new Promise((resolve) => setTimeout(resolve, 500));
+                }
+                if (retry) {
+                    // Sleep for a bit before retrying connection to avoid spam.
+                    await new Promise((resolve) => setTimeout(resolve, retry_timeout_ms));
+                }
+                else {
+                    return;
+                }
+            }
+            catch (error) {
+                console.error(error);
+                if (retry) {
+                    // Sleep for a bit before retrying, maybe Komodo Core is down temporarily.
+                    await new Promise((resolve) => setTimeout(resolve, retry_timeout_ms));
+                }
+                else {
+                    return;
+                }
+            }
+        }
+    };
+    const { connect_terminal, execute_terminal, execute_terminal_stream, connect_exec, connect_container_exec, execute_container_exec, execute_container_exec_stream, connect_deployment_exec, execute_deployment_exec, execute_deployment_exec_stream, connect_stack_exec, execute_stack_exec, execute_stack_exec_stream, } = terminal_methods(url, state);
+    return {
+        /**
+         * Call the `/auth` api.
+         *
+         * ```
+         * const login_options = await komodo.auth("GetLoginOptions", {});
+         * ```
+         *
+         * https://docs.rs/komodo_client/latest/komodo_client/api/auth/index.html
+         */
+        auth,
+        /**
+         * Call the `/user` api.
+         *
+         * ```
+         * const { key, secret } = await komodo.user("CreateApiKey", {
+         *   name: "my-api-key"
+         * });
+         * ```
+         *
+         * https://docs.rs/komodo_client/latest/komodo_client/api/user/index.html
+         */
+        user,
+        /**
+         * Call the `/read` api.
+         *
+         * ```
+         * const stack = await komodo.read("GetStack", {
+         *   stack: "my-stack"
+         * });
+         * ```
+         *
+         * https://docs.rs/komodo_client/latest/komodo_client/api/read/index.html
+         */
+        read,
+        /**
+         * Call the `/write` api.
+         *
+         * ```
+         * const build = await komodo.write("UpdateBuild", {
+         *   id: "my-build",
+         *   config: {
+         *     version: "1.0.4"
+         *   }
+         * });
+         * ```
+         *
+         * https://docs.rs/komodo_client/latest/komodo_client/api/write/index.html
+         */
+        write,
+        /**
+         * Call the `/execute` api.
+         *
+         * ```
+         * const update = await komodo.execute("DeployStack", {
+         *   stack: "my-stack"
+         * });
+         * ```
+         *
+         * NOTE. These calls return immediately when the update is created, NOT when the execution task finishes.
+         * To have the call only return when the task finishes, use [execute_and_poll_until_complete].
+         *
+         * https://docs.rs/komodo_client/latest/komodo_client/api/execute/index.html
+         */
+        execute,
+        /**
+         * Call the `/execute` api, and poll the update until the task has completed.
+         *
+         * ```
+         * const update = await komodo.execute_and_poll("DeployStack", {
+         *   stack: "my-stack"
+         * });
+         * ```
+         *
+         * https://docs.rs/komodo_client/latest/komodo_client/api/execute/index.html
+         */
+        execute_and_poll,
+        /**
+         * Poll an Update (returned by the `execute` calls) until the `status` is `Complete`.
+         * https://docs.rs/komodo_client/latest/komodo_client/entities/update/struct.Update.html#structfield.status.
+         */
+        poll_update_until_complete,
+        /** Returns the version of Komodo Core the client is calling to. */
+        core_version,
+        /**
+         * Connects to update websocket, performs login and attaches handlers,
+         * and returns the WebSocket handle.
+         */
+        get_update_websocket,
+        /**
+         * Subscribes to the update websocket with automatic reconnect loop.
+         *
+         * Note. Awaiting this method will never finish.
+         */
+        subscribe_to_update_websocket,
+        /**
+         * Subscribes to terminal io over websocket message,
+         * for use with xtermjs.
+         */
+        connect_terminal,
+        /**
+         * Executes a command on a given Server / terminal,
+         * and gives a callback to handle the output as it comes in.
+         *
+         * ```ts
+         * await komodo.execute_terminal(
+         *   {
+         *     server: "my-server",
+         *     terminal: "name",
+         *     command: 'for i in {1..3}; do echo "$i"; sleep 1; done',
+         *   },
+         *   {
+         *     onLine: (line) => console.log(line),
+         *     onFinish: (code) => console.log("Finished:", code),
+         *   }
+         * );
+         * ```
+         */
+        execute_terminal,
+        /**
+         * Executes a command on a given Server / terminal,
+         * and returns a stream to process the output as it comes in.
+         *
+         * Note. The final line of the stream will usually be
+         * `__KOMODO_EXIT_CODE__:0`. The number
+         * is the exit code of the command.
+         *
+         * If this line is NOT present, it means the stream
+         * was terminated early, ie like running `exit`.
+         *
+         * ```ts
+         * const stream = await komodo.execute_terminal_stream({
+         *   server: "my-server",
+         *   terminal: "name",
+         *   command: 'for i in {1..3}; do echo "$i"; sleep 1; done',
+         * });
+         *
+         * for await (const line of stream) {
+         *   console.log(line);
+         * }
+         * ```
+         */
+        execute_terminal_stream,
+        /**
+         * Subscribes to container exec io over websocket message,
+         * for use with xtermjs. Can connect to container on a Server,
+         * or associated with a Deployment or Stack.
+         * Terminal permission on connecting resource required.
+         */
+        connect_exec,
+        /**
+         * Subscribes to container exec io over websocket message,
+         * for use with xtermjs. Can connect to Container on a Server.
+         * Server Terminal permission required.
+         */
+        connect_container_exec,
+        /**
+         * Executes a command on a given container,
+         * and gives a callback to handle the output as it comes in.
+         *
+         * ```ts
+         * await komodo.execute_container_exec(
+         *   {
+         *     server: "my-server",
+         *     container: "name",
+         *     shell: "bash",
+         *     command: 'for i in {1..3}; do echo "$i"; sleep 1; done',
+         *   },
+         *   {
+         *     onLine: (line) => console.log(line),
+         *     onFinish: (code) => console.log("Finished:", code),
+         *   }
+         * );
+         * ```
+         */
+        execute_container_exec,
+        /**
+         * Executes a command on a given container,
+         * and returns a stream to process the output as it comes in.
+         *
+         * Note. The final line of the stream will usually be
+         * `__KOMODO_EXIT_CODE__:0`. The number
+         * is the exit code of the command.
+         *
+         * If this line is NOT present, it means the stream
+         * was terminated early, ie like running `exit`.
+         *
+         * ```ts
+         * const stream = await komodo.execute_container_exec_stream({
+         *   server: "my-server",
+         *   container: "name",
+         *   shell: "bash",
+         *   command: 'for i in {1..3}; do echo "$i"; sleep 1; done',
+         * });
+         *
+         * for await (const line of stream) {
+         *   console.log(line);
+         * }
+         * ```
+         */
+        execute_container_exec_stream,
+        /**
+         * Subscribes to deployment container exec io over websocket message,
+         * for use with xtermjs. Can connect to Deployment container.
+         * Deployment Terminal permission required.
+         */
+        connect_deployment_exec,
+        /**
+         * Executes a command on a given deployment container,
+         * and gives a callback to handle the output as it comes in.
+         *
+         * ```ts
+         * await komodo.execute_deployment_exec(
+         *   {
+         *     deployment: "my-deployment",
+         *     shell: "bash",
+         *     command: 'for i in {1..3}; do echo "$i"; sleep 1; done',
+         *   },
+         *   {
+         *     onLine: (line) => console.log(line),
+         *     onFinish: (code) => console.log("Finished:", code),
+         *   }
+         * );
+         * ```
+         */
+        execute_deployment_exec,
+        /**
+         * Executes a command on a given deployment container,
+         * and returns a stream to process the output as it comes in.
+         *
+         * Note. The final line of the stream will usually be
+         * `__KOMODO_EXIT_CODE__:0`. The number
+         * is the exit code of the command.
+         *
+         * If this line is NOT present, it means the stream
+         * was terminated early, ie like running `exit`.
+         *
+         * ```ts
+         * const stream = await komodo.execute_deployment_exec_stream({
+         *   deployment: "my-deployment",
+         *   shell: "bash",
+         *   command: 'for i in {1..3}; do echo "$i"; sleep 1; done',
+         * });
+         *
+         * for await (const line of stream) {
+         *   console.log(line);
+         * }
+         * ```
+         */
+        execute_deployment_exec_stream,
+        /**
+         * Subscribes to container exec io over websocket message,
+         * for use with xtermjs. Can connect to Stack service container.
+         * Stack Terminal permission required.
+         */
+        connect_stack_exec,
+        /**
+         * Executes a command on a given stack service container,
+         * and gives a callback to handle the output as it comes in.
+         *
+         * ```ts
+         * await komodo.execute_stack_exec(
+         *   {
+         *     stack: "my-stack",
+         *     service: "database"
+         *     shell: "bash",
+         *     command: 'for i in {1..3}; do echo "$i"; sleep 1; done',
+         *   },
+         *   {
+         *     onLine: (line) => console.log(line),
+         *     onFinish: (code) => console.log("Finished:", code),
+         *   }
+         * );
+         * ```
+         */
+        execute_stack_exec,
+        /**
+         * Executes a command on a given stack service container,
+         * and returns a stream to process the output as it comes in.
+         *
+         * Note. The final line of the stream will usually be
+         * `__KOMODO_EXIT_CODE__:0`. The number
+         * is the exit code of the command.
+         *
+         * If this line is NOT present, it means the stream
+         * was terminated early, ie like running `exit`.
+         *
+         * ```ts
+         * const stream = await komodo.execute_stack_exec_stream({
+         *   stack: "my-stack",
+         *   service: "service1",
+         *   shell: "bash",
+         *   command: 'for i in {1..3}; do echo "$i"; sleep 1; done',
+         * });
+         *
+         * for await (const line of stream) {
+         *   console.log(line);
+         * }
+         * ```
+         */
+        execute_stack_exec_stream,
+    };
 }
 
 /**
- * The main function for the action.
- *
- * @returns Resolves when the action is complete.
+ * Type guard:
+ * - filters out "Err" objects
+ * - ensures Update has a Mongo ObjectId with $oid
+ */
+function hasOid(item) {
+    return ('operation' in item && // discriminate Update vs Err
+        typeof item._id?.$oid === 'string');
+}
+async function writeStepSummary(updateStatusMap) {
+    const summaryFile = process.env.GITHUB_STEP_SUMMARY;
+    if (!summaryFile)
+        return;
+    let markdown = `### 📝 Komodo Deployment Summary\n\n`;
+    markdown += `| Update ID | Status |\n`;
+    markdown += `|-----------|--------|\n`;
+    for (const [id, status] of Object.entries(updateStatusMap)) {
+        markdown += `| ${id} | ${status} |\n`;
+    }
+    await writeFile(summaryFile, markdown, { flag: 'a' }); // 'a' = append
+}
+/**
+ * Execute a single Komodo operation depending on the resource kind
+ */
+async function executeOne(client, kind, name) {
+    switch (kind) {
+        case 'stack':
+            return client.execute_and_poll('DeployStack', { stack: name });
+        case 'procedure':
+            return client.execute_and_poll('RunProcedure', { procedure: name });
+        default:
+            throw new Error(`Unsupported kind: ${kind}`);
+    }
+}
+/**
+ * Main entrypoint of the GitHub Action
  */
 async function run() {
     try {
-        const ms = coreExports.getInput('milliseconds');
-        // Debug logs are only output if the `ACTIONS_STEP_DEBUG` secret is true
-        coreExports.debug(`Waiting ${ms} milliseconds ...`);
-        // Log the current timestamp, wait, then log the new timestamp
-        coreExports.debug(new Date().toTimeString());
-        await wait(parseInt(ms, 10));
-        coreExports.debug(new Date().toTimeString());
-        // Set outputs for other workflow steps to use
-        coreExports.setOutput('time', new Date().toTimeString());
+        // ---- Inputs -------------------------------------------------------------
+        const kind = coreExports.getInput('kind', { required: true });
+        const rawPatterns = coreExports.getInput('patterns', { required: true });
+        const dryRun = coreExports.getInput('dry-run') === 'true';
+        const patterns = JSON.parse(rawPatterns);
+        if (!Array.isArray(patterns) || patterns.length === 0) {
+            coreExports.setOutput('updates', 'Nothing to update here');
+        }
+        coreExports.info(`Kind: ${kind}`);
+        coreExports.info(`Targets: ${patterns.join(', ')}`);
+        if (dryRun) {
+            coreExports.info('🧪 Dry-run enabled, nothing will be deployed');
+            coreExports.setOutput('updates', {});
+            return;
+        }
+        // ---- Komodo client ------------------------------------------------------
+        const komodoUrl = coreExports.getInput('komodo-url') || process.env.KOMODO_URL;
+        const apiKey = coreExports.getInput('api-key') || process.env.KOMODO_API_KEY;
+        const apiSecret = coreExports.getInput('api-secret') || process.env.KOMODO_API_SECRET;
+        if (!komodoUrl || !apiKey || !apiSecret) {
+            coreExports.setFailed('Komodo URL / API key / API secret must be provided either via input or env');
+            return;
+        }
+        const client = KomodoClient(komodoUrl, {
+            type: 'api-key',
+            params: {
+                key: apiKey,
+                secret: apiSecret
+            }
+        });
+        // ---- Execution ----------------------------------------------------------
+        const results = [];
+        for (const name of patterns) {
+            coreExports.info(`🚀 ${kind} → ${name}`);
+            const result = await executeOne(client, kind, name);
+            if (Array.isArray(result)) {
+                results.push(...result);
+            }
+            else {
+                results.push(result);
+            }
+        }
+        // ---- Output mapping -----------------------------------------------------
+        const updateStatusMap = results
+            .filter(hasOid)
+            .reduce((acc, update) => {
+            acc[update._id.$oid] = update.status;
+            return acc;
+        }, {});
+        coreExports.setOutput('updates', updateStatusMap);
+        // Write summary to GitHub UI
+        await writeStepSummary(updateStatusMap);
     }
-    catch (error) {
-        // Fail the workflow run if an error occurs
-        if (error instanceof Error)
-            coreExports.setFailed(error.message);
+    catch (err) {
+        if (err instanceof Error)
+            coreExports.setFailed(err.message);
     }
 }
 

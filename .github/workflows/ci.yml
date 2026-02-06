@@ -15,7 +15,7 @@ jobs:
   test-typescript:
     name: TypeScript Tests
     runs-on: ubuntu-latest
-    env: 
+    env:
       KOMODO_URL: ${{ secrets.KOMODO_URL }}
       KOMODO_API_KEY: ${{ secrets.KOMODO_API_KEY }}
       KOMODO_API_SECRET: ${{ secrets.KOMODO_API_SECRET }}
@@ -72,9 +72,9 @@ jobs:
 
       - name: Print Output
         id: output
-        run: echo "${{ steps.test-deploy-stack.outputs }}" && echo "${{ steps.test-run-procedure.outputs }}"
+        run:
+          echo "${{ steps.test-deploy-stack.outputs }}" && echo "${{
+          steps.test-run-procedure.outputs }}"
 
       - name: Check summary file
         run: cat $GITHUB_STEP_SUMMARY
-
-        
