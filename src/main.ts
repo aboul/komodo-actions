@@ -1,27 +1,150 @@
 import * as core from '@actions/core'
-import { wait } from './wait.js'
+import { writeFile } from 'node:fs/promises'
+import { KomodoClient } from 'komodo_client'
+import type {
+  Update,
+  BatchExecutionResponseItemErr
+} from 'komodo_client/dist/types.js'
 
 /**
- * The main function for the action.
- *
- * @returns Resolves when the action is complete.
+ * Union type returned by Komodo batch / execution endpoints
+ */
+type UpdateItem =
+  | Update
+  | (Update | { status: 'Err'; data: BatchExecutionResponseItemErr })
+
+type UpdateResult = UpdateItem | UpdateItem[]
+
+/**
+ * Type guard:
+ * - filters out "Err" objects
+ * - ensures Update has a Mongo ObjectId with $oid
+ */
+function hasOid(item: UpdateItem): item is Update & { _id: { $oid: string } } {
+  return (
+    'operation' in item && // discriminate Update vs Err
+    typeof item._id?.$oid === 'string'
+  )
+}
+
+async function writeStepSummary(updateStatusMap: Record<string, string>) {
+  const summaryFile = process.env.GITHUB_STEP_SUMMARY
+  if (!summaryFile) return
+
+  let markdown = `### 📝 Komodo Deployment Summary\n\n`
+  markdown += `| Update ID | Status |\n`
+  markdown += `|-----------|--------|\n`
+
+  for (const [id, status] of Object.entries(updateStatusMap)) {
+    markdown += `| ${id} | ${status} |\n`
+  }
+
+  await writeFile(summaryFile, markdown, { flag: 'a' }) // 'a' = append
+}
+
+/**
+ * Execute a single Komodo operation depending on the resource kind
+ */
+async function executeOne(
+  client: ReturnType<typeof KomodoClient>,
+  kind: 'stack' | 'service' | 'procedure',
+  name: string
+): Promise<UpdateResult> {
+  switch (kind) {
+    case 'stack':
+      return client.execute_and_poll('DeployStack', { stack: name })
+
+    case 'procedure':
+      return client.execute_and_poll('RunProcedure', { procedure: name })
+
+    default:
+      throw new Error(`Unsupported kind: ${kind}`)
+  }
+}
+
+/**
+ * Main entrypoint of the GitHub Action
  */
 export async function run(): Promise<void> {
   try {
-    const ms: string = core.getInput('milliseconds')
+    // ---- Inputs -------------------------------------------------------------
 
-    // Debug logs are only output if the `ACTIONS_STEP_DEBUG` secret is true
-    core.debug(`Waiting ${ms} milliseconds ...`)
+    const kind = core.getInput('kind', { required: true }) as
+      | 'stack'
+      | 'service'
+      | 'procedure'
 
-    // Log the current timestamp, wait, then log the new timestamp
-    core.debug(new Date().toTimeString())
-    await wait(parseInt(ms, 10))
-    core.debug(new Date().toTimeString())
+    const rawPatterns = core.getInput('patterns', { required: true })
+    const dryRun = core.getInput('dry-run') === 'true'
 
-    // Set outputs for other workflow steps to use
-    core.setOutput('time', new Date().toTimeString())
-  } catch (error) {
-    // Fail the workflow run if an error occurs
-    if (error instanceof Error) core.setFailed(error.message)
+    const patterns: string[] = JSON.parse(rawPatterns)
+
+    if (!Array.isArray(patterns) || patterns.length === 0) {
+      throw new Error('patterns must be a non-empty JSON array')
+    }
+
+    core.info(`Kind: ${kind}`)
+    core.info(`Targets: ${patterns.join(', ')}`)
+
+    if (dryRun) {
+      core.info('🧪 Dry-run enabled, nothing will be deployed')
+      return
+    }
+
+    // ---- Komodo client ------------------------------------------------------
+
+    const komodoUrl = core.getInput('komodo-url') || process.env.KOMODO_URL
+    const apiKey = core.getInput('api-key') || process.env.KOMODO_API_KEY
+    const apiSecret =
+      core.getInput('api-secret') || process.env.KOMODO_API_SECRET
+
+    if (!komodoUrl || !apiKey || !apiSecret) {
+      throw new Error(
+        'Komodo URL / API key / API secret must be provided either via input or env'
+      )
+    }
+
+    const client = KomodoClient(komodoUrl, {
+      type: 'api-key',
+      params: {
+        key: apiKey,
+        secret: apiSecret
+      }
+    })
+
+    // ---- Execution ----------------------------------------------------------
+
+    const results: UpdateItem[] = []
+
+    for (const name of patterns) {
+      core.info(`🚀 ${kind} → ${name}`)
+
+      const result = await executeOne(client, kind, name)
+      if (Array.isArray(result)) {
+        results.push(...result)
+      } else {
+        results.push(result)
+      }
+    }
+
+    // ---- Output mapping -----------------------------------------------------
+
+    const updateStatusMap = results
+      .filter(hasOid)
+      .reduce<Record<string, Update['status']>>((acc, update) => {
+        acc[update._id.$oid] = update.status
+        return acc
+      }, {})
+
+    core.setOutput('updates', updateStatusMap)
+
+    // Write summary to GitHub UI
+    await writeStepSummary(updateStatusMap)
+  } catch (err) {
+    if (err instanceof Error) {
+      core.setFailed(err.message)
+    } else {
+      core.setFailed('Unknown error')
+    }
   }
 }

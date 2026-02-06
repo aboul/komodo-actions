@@ -1,24 +1,39 @@
-name: The name of your action here
-description: Provide a description here
-author: Your name or organization here
+name: Komodo Actions
+description: Implement some Komodo API methods for Github Actions
+author: aboul
 
 # Add your action's branding here. This will appear on the GitHub Marketplace.
 branding:
-  icon: heart
-  color: red
+  icon: home
+  color: green
 
 # Define your inputs here.
 inputs:
-  milliseconds:
-    description: Your input description here
+  komodo-url:
+    description: 'Komodo server URL (e.g., https://komodo.example.com)'
     required: true
-    default: '1000'
+  api-key:
+    description: 'Komodo API key'
+    required: true
+  api-secret:
+    description: 'Komodo API secret'
+    required: true
+  kind:
+    description: 'Type de ressource à déployer: stack | service | procedure'
+    required: true
+  patterns:
+    description: 'JSON array des noms ou patterns des ressources à déployer, ex: ["website","backend"]'
+    required: true
+  dry-run: 
+    description: Dry-run
+    required: false
+    default: 'false'
 
-# Define your outputs here.
 outputs:
-  time:
-    description: Your output description here
+  updates:
+    description: 'A JSON representation of the update(s) returned by Komodo'
 
 runs:
-  using: node24
-  main: dist/index.js
+  using: 'node24'
+  main: 'dist/index.js' # ton JS compilé depuis TypeScript
+  
