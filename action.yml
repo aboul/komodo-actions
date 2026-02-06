@@ -11,13 +11,13 @@ branding:
 inputs:
   komodo-url:
     description: 'Komodo server URL (e.g., https://komodo.example.com)'
-    required: true
+    required: false
   api-key:
     description: 'Komodo API key'
-    required: true
+    required: false
   api-secret:
     description: 'Komodo API secret'
-    required: true
+    required: false
   kind:
     description: 'Resource type to deploy: stack | service | procedure'
     required: true

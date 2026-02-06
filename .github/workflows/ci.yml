@@ -11,14 +11,16 @@ on:
 permissions:
   contents: read
 
+
+env:
+  KOMODO_URL: ${{ secrets.KOMODO_URL }}
+  KOMODO_API_KEY: ${{ secrets.KOMODO_API_KEY }}
+  KOMODO_API_SECRET: ${{ secrets.KOMODO_API_SECRET }}
+
 jobs:
   test-typescript:
     name: TypeScript Tests
     runs-on: ubuntu-latest
-    env:
-      KOMODO_URL: ${{ secrets.KOMODO_URL }}
-      KOMODO_API_KEY: ${{ secrets.KOMODO_API_KEY }}
-      KOMODO_API_SECRET: ${{ secrets.KOMODO_API_SECRET }}
     steps:
       - name: Checkout
         id: checkout
@@ -63,20 +65,16 @@ jobs:
           kind: stack
           patterns: '["dev_apps_website"]'
 
-      - name: Test Run Pprocedure Action
+      - name: Test Run Procedure Action
         id: test-run-procedure
         uses: ./
         with:
           kind: procedure
           patterns: '["test-procedure"]'
-          api-key: '{{ secrets.KOMODO_API_KEY }}'
-          api-secret: '{{ secrets.KOMODO_API_SECRET }}'
-          komodo-url: '{{ secrets.KOMODO_URL }}'
       - name: Print Output
         id: output
         run:
-          echo "${{ steps.test-deploy-stack.outputs }}" && echo "${{
-          steps.test-run-procedure.outputs }}"
+          echo "${{ toJson(steps.test-deploy-stack.outputs.updates) }}" && echo "${{ toJson(steps.test-run-procedure.outputs.updates) }}"
 
       - name: Check summary file
-        run: 'cat $GITHUB_STEP_SUMMARY'
+        run: cat "$GITHUB_STEP_SUMMARY"
